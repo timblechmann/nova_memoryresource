@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel redundant runs on the same ref (e.g. rapid pushes to a PR branch)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     compiler: g++-13,     packages: g++-13,   build_type: Debug   }
+          - { os: ubuntu-24.04,     compiler: g++-14,     packages: g++-14,   build_type: Release }
+          - { os: ubuntu-24.04,     compiler: clang++-19, packages: clang-19, build_type: Debug   }
+          - { os: ubuntu-24.04,     compiler: clang++-20, packages: clang-20, build_type: Release }
+          - { os: ubuntu-22.04,     compiler: g++-12,     packages: g++-12,   build_type: Debug   }
+          - { os: ubuntu-24.04-arm, compiler: g++-14,     packages: g++-14,   build_type: Debug   }
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install compiler
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      # Cache CPM-downloaded sources keyed on CMakeLists.txt content.
+      - name: Cache CPM sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/cpm-cache
+          key: cpm-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: cpm-${{ runner.os }}-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2.21
+        with:
+          key: ${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}
+
+      - name: Configure, build, and test
+        env:
+          CPM_SOURCE_CACHE: ${{ runner.temp }}/cpm-cache
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+  build-windows:
+    needs: build-linux
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows-2025, arch: x64, build_type: Release }
+          - { os: windows-2022, arch: x64, build_type: Release }
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache CPM sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/cpm-cache
+          key: cpm-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: cpm-${{ runner.os }}-${{ matrix.arch }}-
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@v1.2.21
+        with:
+          key: windows-${{ matrix.arch }}-${{ matrix.build_type }}
+          variant: sccache
+
+      - name: Set up MSVC
+        uses: TheMrMilchmann/setup-msvc-dev@v3
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Configure, build, and test
+        env:
+          CPM_SOURCE_CACHE: ${{ runner.temp }}/cpm-cache
+        run: |
+          cmake -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+  build-macos:
+    needs: build-windows
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include:
+          - { os: macos-14, build_type: Release }
+          - { os: macos-15, build_type: Release }
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache CPM sources
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/cpm-cache
+          key: cpm-${{ runner.os }}-${{ matrix.os }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: cpm-${{ runner.os }}-${{ matrix.os }}-
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2.21
+        with:
+          key: ${{ matrix.os }}-${{ matrix.build_type }}
+
+      - name: Configure, build, and test
+        env:
+          CPM_SOURCE_CACHE: ${{ runner.temp }}/cpm-cache
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel 1
+          ctest --test-dir build --output-on-failure
