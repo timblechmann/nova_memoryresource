@@ -10,10 +10,10 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
-#include <optional>
 #include <span>
 #include <tlsf.h>
 
+#include <nova/parameter/parameter.hpp>
 #include <nova/pmr/detail/memlock.hpp>
 
 #ifdef NOVA_MR_HAS_TLSF
@@ -24,21 +24,26 @@ namespace nova::pmr {
 //
 // policies
 
+namespace detail {
+struct static_size_tag
+{};
+struct lock_memory_tag
+{};
+struct use_mutex_tag
+{};
+
+using tlsf_allowed_tags = std::tuple< static_size_tag, lock_memory_tag, use_mutex_tag >;
+} // namespace detail
+
 /// @brief Policy tag: statically sized memory pool embedded in the object.
 /// @tparam Size The size of the pool in bytes.
 template < std::size_t Size >
-struct static_size
-{
-    static constexpr std::size_t size = Size;
-};
+using static_size = parameter::size_param< struct detail::static_size_tag, Size >;
 
 /// @brief Policy tag: enable thread-safe locking with the given mutex type.
 /// @tparam MutexType The mutex type to use; defaults to `std::mutex`.
 template < typename MutexType = std::mutex >
-struct use_mutex
-{
-    using mutex_type = MutexType;
-};
+using use_mutex = parameter::type_param< struct detail::use_mutex_tag, MutexType >;
 
 /// @brief Policy tag: lock the pool buffer into physical memory (`mlock`/`VirtualLock`),
 ///        preventing it from being swapped out by the OS.
@@ -52,8 +57,7 @@ struct use_mutex
 ///                                  nova::pmr::lock_memory > mr;
 /// assert( mr.is_memory_locked() ); // Usually true (unless OS refused lock)
 /// ```
-struct lock_memory
-{};
+using lock_memory = parameter::flag_param< struct detail::lock_memory_tag >;
 
 /// @brief Tag type for runtime memory locking via constructor argument.
 ///
@@ -73,57 +77,14 @@ inline constexpr enable_memory_locking_t enable_memory_locking {};
 
 namespace detail {
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// storage
 
-template < typename T >
-struct is_static_size : std::false_type
-{};
-
-template < size_t Size >
-struct is_static_size< static_size< Size > > : std::true_type
-{};
-
-template < typename... Policies >
-constexpr bool has_static_size()
-{
-    constexpr auto accumulation = ( int( is_static_size< Policies >::value ) + ... + 0 );
-    switch ( accumulation ) {
-    case 0:  return false;
-    case 1:  return true;
-    default: static_assert( accumulation <= 1, "Multiple static_size policies provided" ); return false;
-    }
-}
-
-template < typename Policy, typename... Policies >
-constexpr std::optional< size_t > get_static_size()
-{
-    if constexpr ( is_static_size< Policy >::value )
-        return Policy::size;
-    else if constexpr ( sizeof...( Policies ) > 0 )
-        return get_static_size< Policies... >();
-    else
-        return std::nullopt;
-}
-
-} // namespace detail
-
-namespace detail {
-
-template < typename Tag >
-struct tlsf_storage;
-
-struct dynamic_pool_tag
-{};
-
-template <>
-struct tlsf_storage< dynamic_pool_tag >
+struct tlsf_heap_storage
 {
     std::unique_ptr< std::byte[] > buffer;
     std::size_t                    size_;
     bool                           memory_locked {};
 
-    explicit tlsf_storage( std::size_t size, bool lock_memory = false ) :
+    explicit tlsf_heap_storage( std::size_t size, bool lock_memory = false ) :
         buffer( new std::byte[ size ] ),
         size_( size )
     {
@@ -132,7 +93,7 @@ struct tlsf_storage< dynamic_pool_tag >
             std::ranges::fill( bytes(), std::byte {} );
     }
 
-    ~tlsf_storage()
+    ~tlsf_heap_storage()
     {
         if ( memory_locked )
             unlock_memory( bytes() );
@@ -156,19 +117,23 @@ struct tlsf_storage< dynamic_pool_tag >
 };
 
 template < std::size_t Size >
-struct tlsf_storage< static_size< Size > >
+struct tlsf_sized_storage
 {
+    static_assert( Size > 1024,
+                   "TLSF pool size must be large enough to hold internal structures; 1 KB is a reasonable lower "
+                   "bound." );
+
     std::array< std::byte, Size > buffer;
     bool                          memory_locked = false;
 
-    explicit tlsf_storage( bool lock_memory = false )
+    explicit tlsf_sized_storage( bool lock_memory = false )
     {
         memory_locked = lock_memory ? try_lock_memory( bytes() ) : false;
         if ( memory_locked )
             std::ranges::fill( bytes(), std::byte {} );
     }
 
-    ~tlsf_storage()
+    ~tlsf_sized_storage()
     {
         if ( memory_locked )
             unlock_memory( bytes() );
@@ -190,23 +155,6 @@ struct tlsf_storage< static_size< Size > >
     }
 };
 
-template < typename... Policies >
-struct select_storage
-{
-    static constexpr bool static_sized = has_static_size< Policies... >();
-
-    static constexpr std::size_t safe_size = [] {
-        if constexpr ( static_sized )
-            return get_static_size< Policies... >().value();
-        else
-            return std::size_t { 0 };
-    }();
-
-    using type = std::conditional_t< static_sized,
-                                     tlsf_storage< nova::pmr::static_size< safe_size > >,
-                                     tlsf_storage< dynamic_pool_tag > >;
-};
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // locking
 
@@ -221,74 +169,6 @@ struct dummy_mutex
         return true;
     }
 };
-
-template < typename T >
-struct is_use_mutex : std::false_type
-{};
-
-template < typename MutexType >
-struct is_use_mutex< nova::pmr::use_mutex< MutexType > > : std::true_type
-{};
-
-template < typename... Policies >
-constexpr bool has_use_mutex()
-{
-    constexpr auto accumulation = ( int( is_use_mutex< Policies >::value ) + ... + 0 );
-    switch ( accumulation ) {
-    case 0:  return false;
-    case 1:  return true;
-    default: static_assert( accumulation <= 1, "Multiple use_mutex policies provided" ); return false;
-    }
-}
-
-
-template < typename Policy >
-struct extract_mutex_type
-{
-    using type = dummy_mutex;
-};
-
-template < typename MutexType >
-struct extract_mutex_type< nova::pmr::use_mutex< MutexType > >
-{
-    using type = MutexType;
-};
-
-template < typename... Policies >
-struct get_mutex_type
-{
-    using type = dummy_mutex;
-};
-
-template < typename Policy, typename... Rest >
-struct get_mutex_type< Policy, Rest... >
-{
-    using type = std::conditional_t< is_use_mutex< Policy >::value,
-                                     typename extract_mutex_type< Policy >::type,
-                                     typename get_mutex_type< Rest... >::type >;
-};
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// memory locking
-
-template < typename T >
-struct is_enable_memory_locking : std::false_type
-{};
-
-template <>
-struct is_enable_memory_locking< nova::pmr::lock_memory > : std::true_type
-{};
-
-template < typename... Policies >
-constexpr bool has_enable_memory_locking()
-{
-    constexpr auto accumulation = ( int( is_enable_memory_locking< Policies >::value ) + ... + 0 );
-    switch ( accumulation ) {
-    case 0:  return false;
-    case 1:  return true;
-    default: static_assert( accumulation <= 1, "Multiple lock_memory policies provided" ); return false;
-    }
-}
 
 } // namespace detail
 
@@ -334,16 +214,19 @@ constexpr bool has_enable_memory_locking()
 /// nova::pmr::tlsf_memory_resource< nova::pmr::static_size< 65536 > > mr( nova::pmr::enable_memory_locking );
 /// ```
 template < typename... Policies >
+    requires( parameter::valid_parameters< detail::tlsf_allowed_tags, Policies... > )
 class tlsf_memory_resource final : public std::pmr::memory_resource
 {
-    using storage_selector             = detail::select_storage< Policies... >;
-    static constexpr bool static_sized = storage_selector::static_sized;
-    using storage_type                 = typename storage_selector::type;
+    static constexpr bool static_sized         = parameter::has_parameter_v< detail::static_size_tag, Policies... >;
+    static constexpr bool compile_time_locking = parameter::has_parameter_v< detail::lock_memory_tag, Policies... >;
 
-    static constexpr bool compile_time_locking = detail::has_enable_memory_locking< Policies... >();
+    using storage_type = std::conditional_t<
+        static_sized,
+        detail::tlsf_sized_storage< parameter::extract_integral_v< detail::static_size_tag, std::size_t, 0, Policies... > >,
+        detail::tlsf_heap_storage >;
 
 public:
-    using mutex_type = typename detail::get_mutex_type< Policies... >::type;
+    using mutex_type = parameter::extract_t< detail::use_mutex_tag, detail::dummy_mutex, Policies... >;
 
 private:
     alignas( alignof( std::max_align_t ) ) storage_type storage_;
@@ -355,26 +238,26 @@ private:
 public:
     /// @brief Construct a dynamically-sized pool of \p size bytes.
     ///        Only available when no `static_size` policy is present.
-    template < typename T = std::bool_constant< static_sized > >
-        requires std::same_as< T, std::false_type >
-    explicit tlsf_memory_resource( std::size_t size ) :
+    explicit tlsf_memory_resource( std::size_t size )
+        requires( !static_sized )
+        :
         storage_( size, compile_time_locking )
     {}
 
     /// @brief Construct a dynamically-sized pool of \p size bytes and lock it into physical memory.
     ///        Only available when no `static_size` policy and no compile-time
     ///        `lock_memory` policy are present — use one or the other, not both.
-    template < typename T = std::bool_constant< static_sized || compile_time_locking > >
-        requires std::same_as< T, std::false_type >
-    tlsf_memory_resource( std::size_t size, enable_memory_locking_t ) :
+    tlsf_memory_resource( std::size_t size, enable_memory_locking_t )
+        requires( !static_sized && !compile_time_locking )
+        :
         storage_( size, true )
     {}
 
     /// @brief Default-construct using the embedded static pool.
     ///        Only available when a `static_size` policy is present.
-    template < typename T = std::bool_constant< !static_sized > >
-        requires std::same_as< T, std::false_type >
-    tlsf_memory_resource() :
+    tlsf_memory_resource()
+        requires( static_sized )
+        :
         storage_( false )
     {}
 

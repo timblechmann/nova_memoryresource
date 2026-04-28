@@ -11,14 +11,16 @@ if (PROJECT_IS_TOP_LEVEL AND NOT CMAKE_MSVC_DEBUG_INFORMATION_FORMAT)
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
 endif()
 
-add_custom_target(nova_memoryresource_project_files SOURCES
-    .clang-tidy
-    .pre-commit-config.yaml
-    _clang-format
-    README.md
-    LICENSE
-    .github/workflows/ci.yml
-)
+if(PROJECT_IS_TOP_LEVEL)
+    add_custom_target(nova_memoryresource_project_files SOURCES
+        .clang-tidy
+        .pre-commit-config.yaml
+        _clang-format
+        README.md
+        LICENSE
+        .github/workflows/ci.yml
+    )
+endif()
 
 function(nova_mr_install_pmr)
     if (NOT COMMAND CPMAddPackage)
@@ -79,9 +81,19 @@ if (NOVA_MR_TLSF AND NOT TARGET tlsf)
     endif()
 endif()
 
-# Project layout
+if (NOT TARGET nova::parameter)
+    nova_mr_install_pmr()
+
+    CPMAddPackage(
+        NAME nova_parameter
+        GITHUB_REPOSITORY timblechmann/nova_parameter
+        GIT_TAG 82a89446de72d2bec8dff295f8156f6f57b2a99c
+    )
+endif()
+
 add_library(nova_memoryresource INTERFACE)
 add_library(nova::memoryresource ALIAS nova_memoryresource)
+target_link_libraries(nova_memoryresource INTERFACE nova::parameter)
 
 target_sources(nova_memoryresource PUBLIC FILE_SET HEADERS BASE_DIRS include)
 
