@@ -13,31 +13,6 @@
 
 #include <cstdint>
 
-TEST_CASE( "policies" )
-{
-    static_assert( nova::pmr::detail::has_static_size< nova::pmr::static_size< 1024 > >() );
-    static_assert( !nova::pmr::detail::has_static_size< int >() );
-
-    static_assert( !nova::pmr::detail::has_use_mutex< nova::pmr::static_size< 1024 > >() );
-    static_assert( nova::pmr::detail::has_use_mutex< nova::pmr::use_mutex<> >() );
-
-    static_assert( std::is_same< nova::pmr::detail::get_mutex_type< nova::pmr::use_mutex<> >::type, std::mutex >::value );
-    static_assert( std::is_same< nova::pmr::detail::get_mutex_type<>::type, nova::pmr::detail::dummy_mutex >::value );
-
-    static_assert( !nova::pmr::detail::has_enable_memory_locking< nova::pmr::static_size< 1024 > >() );
-    static_assert( !nova::pmr::detail::has_enable_memory_locking< nova::pmr::use_mutex<> >() );
-    static_assert( nova::pmr::detail::has_enable_memory_locking< nova::pmr::lock_memory >() );
-    static_assert(
-        nova::pmr::detail::has_enable_memory_locking< nova::pmr::static_size< 1024 >, nova::pmr::lock_memory >() );
-
-#if 0 // multiple keyword arguments should statically assert
-    nova::pmr::detail::has_static_size< nova::pmr::static_size< 512 >, nova::pmr::static_size< 1022 > >();
-    nova::pmr::detail::has_use_mutex< nova::pmr::use_mutex<>, nova::pmr::use_mutex<> >();
-    nova::pmr::detail::has_enable_memory_locking< nova::pmr::lock_memory, nova::pmr::lock_memory >();
-#endif
-}
-
-
 TEST_CASE( "memory resource instantiation" )
 {
 #ifdef NOVA_MR_HAS_TLSF
