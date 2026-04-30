@@ -264,9 +264,9 @@ public:
     /// @brief Construct using the embedded static pool and lock it into physical memory.
     ///        Only available when a `static_size` policy is present and no compile-time
     ///        `lock_memory` policy is set — use one or the other, not both.
-    template < typename T = std::bool_constant< !static_sized || compile_time_locking > >
-        requires std::same_as< T, std::false_type >
-    explicit tlsf_memory_resource( enable_memory_locking_t ) :
+    explicit tlsf_memory_resource( enable_memory_locking_t )
+        requires( static_sized && !compile_time_locking )
+        :
         storage_( true )
     {}
 
