@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <array>
-#include <concepts>
 #include <cstddef>
 #include <memory>
 #include <memory_resource>
@@ -15,67 +14,16 @@
 
 #include <nova/parameter/parameter.hpp>
 #include <nova/pmr/detail/memlock.hpp>
+#include <nova/pmr/policies.hpp>
 
 #ifdef NOVA_MR_HAS_TLSF
 
 namespace nova::pmr {
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//
-// policies
-
 namespace detail {
-struct static_size_tag
-{};
-struct lock_memory_tag
-{};
-struct use_mutex_tag
-{};
+
 
 using tlsf_allowed_tags = std::tuple< static_size_tag, lock_memory_tag, use_mutex_tag >;
-} // namespace detail
-
-/// @brief Policy tag: statically sized memory pool embedded in the object.
-/// @tparam Size The size of the pool in bytes.
-template < std::size_t Size >
-using static_size = parameter::size_param< struct detail::static_size_tag, Size >;
-
-/// @brief Policy tag: enable thread-safe locking with the given mutex type.
-/// @tparam MutexType The mutex type to use; defaults to `std::mutex`.
-template < typename MutexType = std::mutex >
-using use_mutex = parameter::type_param< struct detail::use_mutex_tag, MutexType >;
-
-/// @brief Policy tag: lock the pool buffer into physical memory (`mlock`/`VirtualLock`),
-///        preventing it from being swapped out by the OS.
-///
-/// This policy causes memory locking to be applied at construction time (compile-time opt-in).
-/// The buffer is zero-filled before locking to ensure physical pages are allocated.
-///
-/// Example:
-/// ```cpp
-/// nova::pmr::tlsf_memory_resource< nova::pmr::static_size< 65536 >,
-///                                  nova::pmr::lock_memory > mr;
-/// assert( mr.is_memory_locked() ); // Usually true (unless OS refused lock)
-/// ```
-using lock_memory = parameter::flag_param< struct detail::lock_memory_tag >;
-
-/// @brief Tag type for runtime memory locking via constructor argument.
-///
-/// Use an instance of this type as a constructor argument to opt-in to memory locking
-/// for a specific memory resource instance (when `lock_memory` policy is not used).
-///
-/// Example:
-/// ```cpp
-/// nova::pmr::tlsf_memory_resource<> mr( 65536, nova::pmr::enable_memory_locking );
-/// if ( mr.is_memory_locked() ) { /* physical RAM locked */ }
-/// ```
-struct enable_memory_locking_t
-{};
-
-/// @brief Convenience constant for runtime tag-dispatch constructor calls.
-inline constexpr enable_memory_locking_t enable_memory_locking {};
-
-namespace detail {
 
 
 struct tlsf_heap_storage
@@ -155,21 +103,6 @@ struct tlsf_sized_storage
     }
 };
 
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// locking
-
-struct dummy_mutex
-{
-    void lock()
-    {}
-    void unlock()
-    {}
-    bool try_lock()
-    {
-        return true;
-    }
-};
-
 } // namespace detail
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -220,13 +153,12 @@ class tlsf_memory_resource final : public std::pmr::memory_resource
     static constexpr bool static_sized         = parameter::has_parameter_v< detail::static_size_tag, Policies... >;
     static constexpr bool compile_time_locking = parameter::has_parameter_v< detail::lock_memory_tag, Policies... >;
 
-    using storage_type = std::conditional_t<
-        static_sized,
-        detail::tlsf_sized_storage< parameter::extract_integral_v< detail::static_size_tag, std::size_t, 0, Policies... > >,
-        detail::tlsf_heap_storage >;
+    using storage_type = std::conditional_t< static_sized,
+                                             detail::tlsf_sized_storage< detail::extract_static_size_v< Policies... > >,
+                                             detail::tlsf_heap_storage >;
 
 public:
-    using mutex_type = parameter::extract_t< detail::use_mutex_tag, detail::dummy_mutex, Policies... >;
+    using mutex_type = detail::extract_mutex_t< Policies... >;
 
 private:
     alignas( alignof( std::max_align_t ) ) storage_type storage_;

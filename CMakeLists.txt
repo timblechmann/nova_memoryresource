@@ -96,6 +96,11 @@ add_library(nova::memoryresource ALIAS nova_memoryresource)
 target_link_libraries(nova_memoryresource INTERFACE nova::parameter)
 
 target_sources(nova_memoryresource PUBLIC FILE_SET HEADERS BASE_DIRS include)
+target_sources(nova_memoryresource PUBLIC FILE_SET HEADERS FILES
+    include/nova/pmr/detail/memlock.hpp
+    include/nova/pmr/policies.hpp
+    include/nova/pmr/static_monotonic_buffer_resource.hpp
+)
 
 if (NOVA_MR_MIMALLOC)
     target_sources(nova_memoryresource PUBLIC FILE_SET HEADERS FILES include/nova/pmr/mimalloc_memory_resource.hpp)
@@ -106,7 +111,6 @@ endif()
 if (NOVA_MR_TLSF)
     target_sources(nova_memoryresource PUBLIC FILE_SET HEADERS FILES
         include/nova/pmr/tlsf_memory_resource.hpp
-        include/nova/pmr/detail/memlock.hpp
     )
     target_link_libraries(nova_memoryresource INTERFACE tlsf)
     target_compile_definitions(nova_memoryresource INTERFACE NOVA_MR_HAS_TLSF=1)
@@ -127,10 +131,12 @@ if(NOVA_BUILD_TESTS)
             CPMAddPackage(
                 NAME Catch2
                 GITHUB_REPOSITORY catchorg/Catch2
-                VERSION 3.13.0
+                VERSION 3.14.0
             )
         endblock()
+        list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
     endif()
+    include(Catch)
 
     add_executable(nova_memoryresource_tests
         tests/test_memory_resource.cpp
@@ -138,7 +144,7 @@ if(NOVA_BUILD_TESTS)
     target_link_libraries(nova_memoryresource_tests PRIVATE nova::memoryresource Catch2::Catch2WithMain)
 
     enable_testing()
-    add_test(NAME nova_memoryresource_tests COMMAND nova_memoryresource_tests)
+    catch_discover_tests(nova_memoryresource_tests)
 endif()
 
 # Installation
