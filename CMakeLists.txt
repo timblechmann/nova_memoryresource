@@ -87,7 +87,7 @@ if (NOT TARGET nova::parameter)
     CPMAddPackage(
         NAME nova_parameter
         GITHUB_REPOSITORY timblechmann/nova_parameter
-        GIT_TAG 82a89446de72d2bec8dff295f8156f6f57b2a99c
+        VERSION 0.9
     )
 endif()
 

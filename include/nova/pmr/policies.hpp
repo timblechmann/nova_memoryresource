@@ -65,9 +65,6 @@ struct dummy_mutex
 template < typename... Policies >
 using extract_mutex_t = parameter::extract_t< use_mutex_tag, dummy_mutex, Policies... >;
 
-template < typename... Policies >
-constexpr size_t extract_static_size_v = parameter::extract_integral_v< static_size_tag, std::size_t, 0, Policies... >;
-
 } // namespace detail
 
 } // namespace nova::pmr

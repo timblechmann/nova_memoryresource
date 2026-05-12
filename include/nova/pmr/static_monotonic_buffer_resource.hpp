@@ -19,8 +19,8 @@ namespace nova::pmr {
 
 namespace detail {
 
-using monotonic_allowed_tags = std::tuple< static_size_tag, lock_memory_tag, use_mutex_tag >;
-;
+using monotonic_allowed_tags  = std::tuple< static_size_tag, lock_memory_tag, use_mutex_tag >;
+using monotonic_required_tags = std::tuple< static_size_tag >;
 
 template < std::size_t Size >
 struct monotonic_static_storage
@@ -88,18 +88,19 @@ struct monotonic_static_storage
 ///
 /// // 64 KB static buffer, thread-safe
 /// nova::pmr::static_monotonic_buffer_resource< nova::pmr::static_size< 65536 >,
-///                                               nova::pmr::use_mutex<> > mr;
+///                                              nova::pmr::use_mutex<> > mr;
 ///
 /// // Static buffer with memory locking
 /// nova::pmr::static_monotonic_buffer_resource< nova::pmr::static_size< 65536 >,
-///                                               nova::pmr::lock_memory > mr;
+///                                              nova::pmr::lock_memory > mr;
 /// ```
 template < typename... Policies >
     requires( parameter::valid_parameters< detail::monotonic_allowed_tags, Policies... >
-              && parameter::has_parameter_v< detail::static_size_tag, Policies... > )
+              && parameter::required_parameters< detail::monotonic_required_tags, Policies... > )
 class static_monotonic_buffer_resource final : public std::pmr::memory_resource
 {
-    static constexpr std::size_t buffer_size   = detail::extract_static_size_v< Policies... >;
+    static constexpr std::size_t buffer_size
+        = parameter::extract_integral_v< detail::static_size_tag, std::size_t, Policies... >;
     static constexpr bool compile_time_locking = parameter::has_parameter_v< detail::lock_memory_tag, Policies... >;
 
     using storage_type = detail::monotonic_static_storage< buffer_size >;

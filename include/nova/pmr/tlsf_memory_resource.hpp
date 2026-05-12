@@ -22,6 +22,8 @@ namespace nova::pmr {
 
 namespace detail {
 
+template < bool B, typename T, typename F >
+using lazy_conditional_t = typename std::conditional_t< B, std::type_identity< T >, std::type_identity< F > >::type;
 
 using tlsf_allowed_tags = std::tuple< static_size_tag, lock_memory_tag, use_mutex_tag >;
 
@@ -150,12 +152,12 @@ template < typename... Policies >
     requires( parameter::valid_parameters< detail::tlsf_allowed_tags, Policies... > )
 class tlsf_memory_resource final : public std::pmr::memory_resource
 {
-    static constexpr bool static_sized         = parameter::has_parameter_v< detail::static_size_tag, Policies... >;
     static constexpr bool compile_time_locking = parameter::has_parameter_v< detail::lock_memory_tag, Policies... >;
-
-    using storage_type = std::conditional_t< static_sized,
-                                             detail::tlsf_sized_storage< detail::extract_static_size_v< Policies... > >,
-                                             detail::tlsf_heap_storage >;
+    static constexpr std::optional< std::size_t > size
+        = parameter::extract_optional_integral_v< detail::static_size_tag, std::size_t, Policies... >;
+    static constexpr bool static_sized = size.has_value();
+    using storage_type
+        = std::conditional_t< size.has_value(), detail::tlsf_sized_storage< size.value_or( 0 ) >, detail::tlsf_heap_storage >;
 
 public:
     using mutex_type = detail::extract_mutex_t< Policies... >;
